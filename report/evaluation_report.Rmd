@@ -1,0 +1,1170 @@
+---
+title: "GSRD Evaluation Report"
+author: "Han Zhang"
+date: "`r Sys.Date()`"
+
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+    extra_dependencies: 
+      - seqsplit
+      - makecell
+      - threeparttable
+    toc: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# 1.Load packages and dataset
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(gridExtra)
+library(reshape2)
+library(scales)
+library(maps)
+
+gsrd <- read.csv("data/GSRD_main.csv", sep = ",")
+```
+
+# 2.Basic information of dataset
+
+```{r,results='hold'}
+n_entries <- nrow(gsrd)
+n_columns <- ncol(gsrd)
+column_names <- colnames(gsrd)
+
+column_types <- vapply(gsrd, function(x) paste(class(x), collapse = ", "), character(1))
+
+column_table <- tibble(
+  `Column Number` = seq_along(column_names),
+  `Column Name`   = column_names,
+  `Data Type`     = column_types
+)
+
+cat(paste(rep("-", 80), collapse = ""), "\n\n")  
+cat("Number of entries:", n_entries, "\n")
+cat("Number of columns:", n_columns, "\n\n")
+
+kable(column_table, 
+      caption = "List of columns in the dataset (with data types)",
+      booktabs = TRUE) %>%
+  kable_styling(
+    latex_options = "hold_position",
+    full_width = FALSE
+  )
+
+cat(paste(rep("-", 80), collapse = ""), "\n\n")
+
+```
+
+# 3.Detailed information check
+
+## 3.1 Reference and Location
+
+### 3.1.1 DATAID, REFID and REF
+
+```{r, results='hold'}
+# Calculate unique counts for reference-related columns
+unique_dataid <- n_distinct(gsrd$DATAID)
+unique_refid <- n_distinct(gsrd$REFID)
+unique_ref <- n_distinct(gsrd$REF)
+
+# Get all unique references (sorted alphabetically)
+all_unique_refs <- gsrd %>%
+  select(REF) %>%
+  distinct() %>%
+  drop_na() %>%
+  arrange(REF) %>%
+  pull(REF)
+
+cat(paste(rep("-", 80), collapse = ""), "\n\n")  
+# Print num of dataid and refid
+cat("Number of DATAID:", unique_dataid, "\n")
+cat("Number of REFID:", unique_refid, "\n")
+# Print references in a formatted list
+cat("References", "\n")
+cat("1. ", all_unique_refs[1], "\n", sep = "")
+for (i in 2:length(all_unique_refs)) {
+  cat(i, ". ", all_unique_refs[i], "\n", sep = "")
+}
+cat(paste(rep("-", 80), collapse = ""), "\n\n")  
+```
+
+### 3.1.2 LAT,LON and ELE
+
+```{r, results='hold'}
+
+# check the range of latitude, longitude and elevation
+site_continuous <- gsrd %>%
+  select(LAT, LON) %>%
+  summarise(
+    var = colnames(.),
+    min = map_dbl(., min, na.rm = TRUE),
+    max = map_dbl(., max, na.rm = TRUE),
+    na_fraction = map_dbl(., ~mean(is.na(.))*100) #fraction of NA number
+  )
+
+kable(site_continuous, caption = "site location") %>%
+  kable_styling(bootstrap_options = "striped")
+
+site_ele <- gsrd %>%
+  select(ELE) %>%
+  summarise(
+    var = colnames(.),
+    na_fraction = map_dbl(., ~mean(is.na(.))*100) #fraction of NA number
+  )
+
+kable(site_ele, caption = "site elevation") %>%
+  kable_styling(bootstrap_options = "striped")
+
+# figure: global distribution
+ggplot(gsrd, aes(x = LON, y = LAT)) +
+  borders("world", colour = "gray50") +
+  geom_point(alpha = 0.5) +
+  coord_quickmap(xlim = c(-180, 180), ylim = c(-90, 90)) +
+  scale_x_continuous(breaks = seq(-180, 180, 60), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(-90, 90, 30),  expand = c(0, 0)) +
+  theme_minimal() +
+  labs(title = "Site distribution", x = "Longitude", y = "Latitude")
+
+```
+
+## 3.2 Climate
+
+including CLIMATE_ZONE, MAT, MAT_ORIGIN, MAP, MAP_ORIGIN, Tg and Alpha
+
+```{r, results='hold'}
+
+# climate_zone
+climate_counts <- gsrd %>%
+  count(CLIMATE_ZONE, name = "num") %>%
+  arrange(desc(num))
+
+kable(climate_counts, caption = "site climatic distribution") %>%
+  kable_styling(bootstrap_options = "striped")
+
+#* statistical description of mean annual temperature (MAT), 
+#* mean annual precipitation (MAP), the mean temperature of growing season(Tg),
+#* and Alpha calculated by SPLASH
+climate_stats <- gsrd %>%
+  select(MAT, MAP, Tg, Alpha) %>%
+  summarise(
+   var = colnames(.),
+    mean = map_dbl(., mean, na.rm = TRUE),
+    std = map_dbl(., sd, na.rm = TRUE),
+    min = map_dbl(., min, na.rm = TRUE),
+    q25 = map_dbl(., ~quantile(., 0.25, na.rm = TRUE)),  # 25%
+    median = map_dbl(., ~quantile(., 0.50, na.rm = TRUE)),  # 50%
+    q75 = map_dbl(., ~quantile(., 0.75, na.rm = TRUE)),  # 75%
+    max = map_dbl(., max, na.rm = TRUE),
+    count = map_dbl(., ~sum(!is.na(.))),
+    na_fraction = map_dbl(., ~mean(is.na(.))*100)
+  )
+
+# Origin of MAT and MAP（MAT_ORIGIN, MAP_ORIGIN）
+origin_counts <- gsrd %>%
+  count(MAT_ORIGIN, name = "MAT_origin") %>%
+  full_join(
+    gsrd %>% count(MAP_ORIGIN, name = "MAP_origin"),
+    by = c("MAT_ORIGIN" = "MAP_ORIGIN")
+  )%>%
+  rename(source="MAT_ORIGIN")
+
+# output
+kable(climate_stats, digits = 2, caption = "climate statistical description") %>%
+  kable_styling(bootstrap_options = "striped")
+
+kable(origin_counts, caption = "climate source") %>%
+  kable_styling(bootstrap_options = "striped")
+
+```
+
+## 3.3 Measurement
+
+### 3.3.1 SEASONAL, YEAR, MONTH, DOY
+
+```{r}
+
+# Calculate counts for SEASONAL categories (Y/N)
+seasonal_stats <- gsrd %>%
+  group_by(SEASONAL) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  complete(SEASONAL = c("Y", "N"), fill = list(Count = 0)) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+# Calculate unique values and data availability for temporal variables
+temporal_metrics <- tibble(
+  Variable = c("YEAR", "MONTH", "DOY"),
+  Unique_Values = c(
+    n_distinct(gsrd$YEAR, na.rm = TRUE),
+    n_distinct(gsrd$MONTH, na.rm = TRUE),
+    n_distinct(gsrd$DOY, na.rm = TRUE)
+  ),
+  Observations_with_Data = c(
+    sum(!is.na(gsrd$YEAR)),
+    sum(!is.na(gsrd$MONTH)),
+    sum(!is.na(gsrd$DOY))
+  ),
+  Data_Availability = paste0(
+    round(Observations_with_Data / nrow(gsrd) * 100, 1), "%"
+  )
+)
+
+
+kable(seasonal_stats,
+      col.names = c("SEASONAL Category", "Count", "Percentage (%)"),
+      caption = "Distribution of SEASONAL measurements",
+      booktabs = TRUE) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE)
+
+temporal_metrics %>%
+  kable(
+    col.names = c("Variable", "Unique Values", "Observations with Data", "Data Availability"),
+    caption = "Summary of temporal measurement variables",
+    booktabs = TRUE
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(4) %>%
+  footnote(
+    general = "Data Availability is calculated as the percentage of 
+    non-missing values relative to total observations.",
+    general_title = "Note:",
+    escape=FALSE
+  )
+
+
+```
+
+### 3.3.2 MEASUREMENT and MTEM
+
+```{r}
+# Calculate counts for MEASUREMENT categories (FIELD/LAB)
+measurement_counts <- gsrd %>%
+  filter(!is.na(MEASUREMENT)) %>%
+  count(MEASUREMENT) %>%
+  complete(MEASUREMENT = c("FIELD", "LAB"), fill = list(n = 0)) %>%  
+  rename(Category = MEASUREMENT, Count = n) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+# Calculate descriptive statistics for MTEM (measurement temperature)
+mtem_stats <- gsrd %>%
+  filter(!is.na(MTEM)) %>%
+  summarise(
+    Variable = "MTEM (Measurement Temperature)",
+    N = n(),
+    Missing = nrow(gsrd) - n(),
+    Mean = round(mean(MTEM), 1),
+    SD = round(sd(MTEM), 1),
+    Min = round(min(MTEM), 1),
+    Max = round(max(MTEM), 1),
+    Median = round(median(MTEM), 1),
+    `25th Percentile` = round(quantile(MTEM, 0.25), 1),
+    `75th Percentile` = round(quantile(MTEM, 0.75), 1)
+  )
+
+measurement_counts %>%
+  kable(
+    caption = "Distribution of measurement methods",
+    booktabs = TRUE,
+    col.names = c("Measurement Method", "Count", "Percentage (%)")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, width = "3cm")
+
+
+mtem_long <- mtem_stats %>%
+  pivot_longer(cols = -Variable, names_to = "Statistic", values_to = "Value")
+
+mtem_long %>%
+  dplyr::select(Statistic, Value) %>%
+  kable(
+    caption = "Descriptive statistics for measurement temperature (°C)",
+    booktabs = TRUE,
+    col.names = c("Statistic", "Value")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(2, width = "2cm") %>%
+  pack_rows(
+    index = setNames(nrow(mtem_long), unique(mtem_long$Variable))  
+  ) %>%
+  footnote(
+    general = "N = number of non-missing observations; SD = standard deviation",
+    general_title = "Note:"
+  )
+
+
+
+```
+
+## 3.4 Plant trait
+
+### 3.4.1 ORIGINAL_SPNAME, FINAL_SPNAME, AUTHORITY, GENUS, FAMILY, GROUP and PFT
+
+```{r}
+invisible(gc())
+# Calculate unique counts for taxonomic variables
+taxonomic_unique <- tibble(
+  Variable = c("ORIGINAL_SPNAME", "FINAL_SPNAME", "AUTHORITY", 
+               "GENUS", "FAMILY", "GROUP", "PFT"),
+  Unique_Values = c(
+    n_distinct(gsrd$ORIGINAL_SPNAME, na.rm = TRUE),
+    n_distinct(gsrd$FINAL_SPNAME, na.rm = TRUE),
+    n_distinct(gsrd$AUTHORITY, na.rm = TRUE),
+    n_distinct(gsrd$GENUS, na.rm = TRUE),
+    n_distinct(gsrd$FAMILY, na.rm = TRUE),
+    n_distinct(gsrd$GROUP, na.rm = TRUE),
+    n_distinct(gsrd$PFT, na.rm = TRUE)
+  )
+)
+
+taxonomic_unique %>%
+  kable(
+    caption = "Unique value counts for taxonomic and functional variables",
+    booktabs = TRUE,
+    col.names = c("Variable", "Number of Unique Values")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  footnote(
+    general = "PFT = Plant Functional Type; GROUP = Gymnosperm or Angiosperm",
+    general_title = "Note:"
+  )
+
+rm(taxonomic_unique) 
+invisible(gc())
+
+```
+
+
+```{r}
+# Data preparation: process taxonomic variables and handle NAs
+gsrd_taxonomy <- gsrd %>%
+  select(FINAL_SPNAME, AUTHORITY, GENUS, FAMILY, GROUP, PFT) %>%
+  mutate(
+    # Convert all to character to avoid type issues
+    across(everything(), ~as.character(.)),
+    # Combine species name and authority, handling NAs
+    Species_Authority = case_when(
+      !is.na(FINAL_SPNAME) & !is.na(AUTHORITY) ~ paste(FINAL_SPNAME, 
+                                                       "(", AUTHORITY, ")", 
+                                                       sep = ""),
+      !is.na(FINAL_SPNAME) & is.na(AUTHORITY) ~ FINAL_SPNAME,
+      TRUE ~ NA_character_
+    )
+  )
+
+# 1. Unique species (FINAL_SPNAME + AUTHORITY) as formatted text list
+unique_species <- gsrd_taxonomy %>%
+  filter(!is.na(Species_Authority)) %>%
+  distinct(Species_Authority) %>%
+  arrange(Species_Authority) %>%  # Sort alphabetically for readability
+  pull(Species_Authority)
+
+## Unique species list
+### Species List (FINAL_SPNAME + AUTHORITY)
+cat(paste("-", unique_species, collapse = "\n"))
+cat(paste(rep("-", 80), collapse = ""), "\n\n")  
+
+# 2. Unique genera as comma-separated text
+unique_genera <- gsrd_taxonomy %>%
+  filter(!is.na(GENUS)) %>%
+  distinct(GENUS) %>%
+  arrange(GENUS) %>%
+  pull(GENUS) %>%
+  paste(collapse = ", ")
+
+data.frame(Genera_List = unique_genera) %>%
+  kable(
+    caption = "Unique genera list",
+    booktabs = TRUE,
+    col.names = c("Genera List")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  column_spec(1, width = "15cm") %>% 
+  row_spec(0, bold = TRUE)
+
+# 3. Unique families as comma-separated text
+unique_families <- gsrd_taxonomy %>%
+  filter(!is.na(FAMILY)) %>%
+  distinct(FAMILY) %>%
+  arrange(FAMILY) %>%
+  pull(FAMILY) %>%
+  paste(collapse = ", ")
+
+data.frame(Families_List = unique_families) %>%
+  kable(
+    caption = "Unique families list",
+    booktabs = TRUE,
+    col.names = c("Families List")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  column_spec(1, width = "15cm") %>%  
+  row_spec(0, bold = TRUE)
+
+# 4. Distribution of GROUP (Gymnosperm/Angiosperm)
+group_dist <- gsrd_taxonomy %>%
+  filter(!is.na(GROUP)) %>%
+  count(GROUP, name = "Count") %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1)) %>%
+  rename("Group" = GROUP)
+
+# 5. Distribution of PFT (Plant Functional Types)
+pft_dist <- gsrd_taxonomy %>%
+  filter(!is.na(PFT)) %>%
+  count(PFT, name = "Count") %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1)) %>%
+  rename("Plant Functional Type (PFT)" = PFT) %>%
+  arrange(desc(Count))  # Sort by abundance
+
+
+group_dist %>%
+  kable(
+    caption = "Distribution of observations across plant groups",
+    booktabs = TRUE,
+    col.names = c("Group", "Number of Observations", "Percentage (%)")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3)
+
+pft_dist %>%
+  kable(
+    caption = "Distribution of observations across plant functional types",
+    booktabs = TRUE,
+    col.names = c("Plant Functional Type (PFT)", "Number of Observations", "Percentage (%)")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(3)
+
+
+```
+
+### 3.4.2 AGE, DIAMETER, WD and RAP
+
+```{r}
+
+# Data preparation: convert to numeric, handle non-numeric values, 
+# and ensure AGE is integer
+gsrd_traits <- gsrd %>%
+  select(AGE, DIAMETER, WD, RAP) %>%
+  mutate(
+    across(everything(), ~as.numeric(as.character(.))),  # Ensure numeric type
+    AGE = ifelse(is.na(AGE), NA, round(AGE)),  # Round AGE to nearest integer and preserve NA
+    RAP = factor(RAP)                 # Treat RAP as categorical
+  )
+
+# 1. Unique value distribution of AGE (sorted numerically)
+age_dist <- gsrd_traits %>%
+  filter(!is.na(AGE)) %>%
+  count(AGE, name = "Count") %>%
+  arrange(AGE) %>%  # Sort by age value
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+# 2. Diameter distribution (binned into intervals)
+diameter_bins <- gsrd_traits %>%
+  filter(!is.na(DIAMETER)) %>%
+  mutate(
+    Diameter_Bin = cut(
+      DIAMETER,
+      breaks = c(0, 10, 20, 30, 50, Inf),  # Bins: 0-10, 10-20, ..., >50 cm
+      labels = c("0-10 cm", "10-20 cm", "20-30 cm", "30-50 cm", ">50 cm"),
+      include.lowest = TRUE
+    )
+  ) %>%
+  count(Diameter_Bin, name = "Count") %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+# 3. Descriptive statistics for WD (wood density)
+wd_stats <- gsrd_traits %>%
+  filter(!is.na(WD)) %>%
+  summarise(
+    Variable = "WD (g cm⁻³)",
+    N = n(),
+    Mean = round(mean(WD), 3),
+    SD = round(sd(WD), 3),
+    Min = round(min(WD), 3),
+    Max = round(max(WD), 3),
+    Median = round(median(WD), 3),
+    `25th Percentile` = round(quantile(WD, 0.25), 3),
+    `75th Percentile` = round(quantile(WD, 0.75), 3)
+  )
+
+# 4. Count distribution for RAP (two categorical values)
+rap_dist <- gsrd_traits %>%
+  filter(!is.na(RAP)) %>%
+  count(RAP, name = "Count") %>%
+  mutate(
+    RAP = as.character(RAP),
+    Percentage = round(Count / sum(Count) * 100, 1)
+  )
+
+
+age_dist %>%
+  kable(
+    caption = "Unique values and counts for AGE (stand age in years)",
+    booktabs = TRUE,
+    col.names = c("AGE (years)", "Count", "Percentage (%)")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE)
+
+diameter_bins %>%
+  kable(
+    caption = "Distribution of DIAMETER (cm) across size intervals",
+    booktabs = TRUE,
+    col.names = c("Diameter Interval", "Count", "Percentage (%)")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE)
+
+
+wd_long <- wd_stats %>%
+  tidyr::pivot_longer(cols = -Variable, names_to = "Statistic", values_to = "Value")
+
+wd_long %>%
+  dplyr::select(Statistic, Value) %>%
+  kableExtra::kable(
+    caption = "Descriptive statistics for WD (wood density)",
+    booktabs = TRUE,
+    longtable = TRUE,                     
+    col.names = c("Statistic", "Value")
+  ) %>%
+  kableExtra::kable_styling(
+    latex_options = c("striped", "repeat_header", "scale_down"),  
+    full_width = FALSE,
+    position = "center",
+    font_size = 8
+  ) %>%
+  kableExtra::pack_rows(
+    index = setNames(nrow(wd_long), "WD (g cm$^{-3}$)")  
+  ) %>%
+  kableExtra::footnote(
+    general = "WD = Wood Density",
+    general_title = "Note:"
+  )
+
+
+
+rap_dist %>%
+  kable(
+    caption = "Distribution of RAP (parenchyma tissue fraction)",
+    booktabs = TRUE,
+    col.names = c("RAP Value", "Count", "Percentage (%)")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  footnote(
+  general = paste0(
+      "RAP values correspond to angiosperms (24.6%) and gymnosperms (7.6%) ."
+  ),
+  general_title = "Note:"
+)
+
+```
+
+## 3.5 Stem Respiration Rate
+
+### 3.5.1 Original stem respiration rate data
+RS_AREA, RS_VOL, RS_MASS
+
+```{r}
+gsrd_resp <- gsrd %>%
+  select(RS_ORIGIN, OriginUnit, RS_AREA, RS_VOL, RS_MASS) %>%
+  mutate(
+    RS_ORIGIN = as.character(RS_ORIGIN),
+    OriginUnit = as.character(OriginUnit)
+  )
+
+# 1. RS_ORIGIN and OriginUnit distribution
+rs_origin_summary <- gsrd_resp %>%
+  filter(!is.na(RS_ORIGIN)) %>%
+  group_by(RS_ORIGIN, OriginUnit) %>%
+  summarise(Count = n(), .groups = "drop")
+
+# 2. Descriptive stats for respiration variables (simplified)
+resp_stats <- gsrd_resp %>%
+  select(RS_AREA, RS_VOL, RS_MASS) %>%
+  summarise(
+    Variable = names(.),
+    N = colSums(!is.na(.)),
+    Mean = round(colMeans(., na.rm = TRUE), 2),
+    SD = round(sapply(., sd, na.rm = TRUE), 2),
+    Min = round(sapply(., min, na.rm = TRUE), 2),
+    Max = round(sapply(., max, na.rm = TRUE), 2),
+    Median = round(sapply(., median, na.rm = TRUE), 2),
+    `25th Percentile` = round(sapply(., function(x) quantile(x, 0.25, na.rm = TRUE)), 2),
+    `75th Percentile` = round(sapply(., function(x) quantile(x, 0.75, na.rm = TRUE)), 2)
+  )
+rs_origin_summary %>%
+  kable(
+    booktabs = TRUE,
+    caption = "Summary of RS\\_ORIGIN categories and original units.",
+    col.names = c("RS_ORIGIN Category", "OriginUnit", "Number of Observations")
+  ) %>%
+  kable_styling(latex_options = c("hold_position", "striped"), 
+                full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE)
+
+resp_stats <- gsrd_resp %>%
+  select(RS_AREA, RS_VOL, RS_MASS) %>%
+  summarise(
+    Variable = names(.),
+    N = colSums(!is.na(.)),
+    Mean = round(colMeans(., na.rm = TRUE), 2),
+    SD = round(sapply(., sd, na.rm = TRUE), 2),
+    Min = sapply(., function(x) {
+      min_val <- min(x, na.rm = TRUE)
+      if (abs(min_val) < 0.01 && min_val != 0) {
+        formatC(min_val, format = "e", digits = 2)
+      } else {
+        as.character(round(min_val, 2))  
+      }
+    }),
+    Max = round(sapply(., max, na.rm = TRUE), 2),
+    Median = round(sapply(., median, na.rm = TRUE), 2),
+    `25th Percentile` = round(sapply(., function(x) quantile(x, 0.25, na.rm = TRUE)), 2),
+    `75th Percentile` = round(sapply(., function(x) quantile(x, 0.75, na.rm = TRUE)), 2)
+  )
+
+resp_stats %>%
+  kable(
+    booktabs = TRUE,
+    caption = "Descriptive statistics for RS\\_AREA, RS\\_VOL, and RS\\_MASS."
+  ) %>%
+  kable_styling(latex_options = c("hold_position", "striped"), 
+                full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE)
+
+
+```
+
+### 3.5.2 Standardization stem respiration rate data
+RSMASS_CAL, RS_MASS25, LNRS25, LNRS25_RAP
+
+```{r}
+# Function to calculate and format statistics for a single variable
+get_stats <- function(data, var_name) {
+  var_data <- pull(data, {{var_name}})
+  tibble(
+    Statistic = c(
+      "Number of non-missing observations",
+      "Mean", "Standard deviation (SD)",
+      "Minimum", "Maximum", "Median",
+      "25th percentile", "75th percentile"
+    ),
+    Value = c(
+      sum(!is.na(var_data)),
+      round(mean(var_data, na.rm = TRUE), 3),
+      round(sd(var_data, na.rm = TRUE), 3),
+      round(min(var_data, na.rm = TRUE), 3),
+      round(max(var_data, na.rm = TRUE), 3),
+      round(median(var_data, na.rm = TRUE), 3),
+      round(quantile(var_data, 0.25, na.rm = TRUE), 3),
+      round(quantile(var_data, 0.75, na.rm = TRUE), 3)
+    )
+  )
+}
+
+# Calculate statistics for each variable
+stats_rsmass_cal <- get_stats(gsrd, RSMASS_CAL)
+stats_rs_mass25 <- get_stats(gsrd, RS_MASS25)
+stats_lnrs25 <- get_stats(gsrd, LNRS25)
+stats_lnrs25_rap <- get_stats(gsrd, LNRS25_RAP)
+
+stats_rsmass_cal %>%
+  kable(
+    caption = "Descriptive statistics for RSMASS\\_CAL",
+    booktabs = TRUE,
+    col.names = c("Statistic", "Value")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, width = "5cm") %>%
+  column_spec(2, width = "3cm")%>%
+  footnote(
+    general = 
+    "RSMASS_CAL is derived from standardized calculations of raw respiration data.",
+    general_title = "Note:",
+    escape = TRUE
+  )
+
+
+stats_rs_mass25 %>%
+  kable(
+    caption = "Descriptive statistics for RS\\_MASS25",
+    booktabs = TRUE,
+    col.names = c("Statistic", "Value")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, width = "5cm") %>%
+  column_spec(2, width = "3cm")%>%
+  footnote(
+    general = "RS_MASS25 is temperature standardized mass-based respiration data.",
+    general_title = "Note:"
+  )
+
+
+stats_lnrs25 %>%
+  kable(
+    caption = "Descriptive statistics for LNRS25",
+    booktabs = TRUE,
+    col.names = c("Statistic", "Value")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, width = "5cm") %>%
+  column_spec(2, width = "3cm")%>%
+  footnote(
+    general = "LNRS25 is natural-logged RSMASS25.",
+    general_title = "Note:"
+  )
+
+
+stats_lnrs25_rap %>%
+  kable(
+    caption = "Descriptive statistics for LNRS25\\_RAP",
+    booktabs = TRUE,
+    col.names = c("Statistic", "Value")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, width = "5cm") %>%
+  column_spec(2, width = "3cm")%>%
+  footnote(
+    general = 
+    "LNRS25_RAP is natural-logged RSMASS25 considering parenchyma tissue fractions.",
+    general_title = "Note:",
+    escape = TRUE
+  )
+
+```
+
+# 4. Technical validation
+## 4.1 Latitude and longitude validation
+```{r}
+# valid ranges: Lat -90 to 90; Lon -180 to 180
+coord_check <- gsrd %>%
+  mutate(
+    LAT_valid = ifelse(LAT >= -90 & LAT <= 90 & !is.na(LAT), "Valid", "Invalid"),
+    LON_valid = ifelse(LON >= -180 & LON <= 180 & !is.na(LON), "Valid", "Invalid")
+  ) %>%
+  count(LAT_valid, LON_valid) %>%
+  rename(`Latitude Status` = LAT_valid, `Longitude Status` = LON_valid, `Count` = n)
+
+coord_check %>%
+  kable(
+    caption = "Validation results for latitude and longitude",
+    booktabs = TRUE
+  ) %>%
+  kable_styling(
+    latex_options = "hold_position",
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE)
+
+```
+
+## 4.2 Main sources of potential outliers under global vs. site-level IQR
+```{r}
+## =========================
+## Parameters
+## =========================
+digits_site <- 3   # Site definition: round(LAT/LON, digits_site)
+min_n_site  <- 10  # Minimum n within a site to compute site-level IQR; 
+                   #otherwise fallback to global thresholds
+top_n_pairs <- 30  # Top N REFID×SITE_ID groups to display in each table
+
+## =========================
+## 0) Basic checks
+## =========================
+required_cols <- c("REFID", "LAT", "LON", "RS_MASS25")
+stopifnot(all(required_cols %in% names(gsrd)))
+
+## =========================
+## 1) Create SITE_ID (rounded LAT/LON)
+## =========================
+gsrd2 <- gsrd %>%
+  mutate(
+    LAT_r = round(LAT, digits_site),
+    LON_r = round(LON, digits_site),
+    SITE_ID = if_else(
+      is.na(LAT_r) | is.na(LON_r),
+      NA_character_,
+      paste0(
+        "lat", formatC(LAT_r, format = "f", digits = digits_site),
+        "_lon", formatC(LON_r, format = "f", digits = digits_site)
+      )
+    )
+  )
+
+## =========================
+## 2) Compute global 3×IQR thresholds (once)
+## =========================
+x <- gsrd2$RS_MASS25
+iqr_g <- IQR(x, na.rm = TRUE)
+q1_g  <- quantile(x, 0.25, na.rm = TRUE)
+q3_g  <- quantile(x, 0.75, na.rm = TRUE)
+
+low_g  <- max(0, as.numeric(q1_g - 3 * iqr_g))
+high_g <- as.numeric(q3_g + 3 * iqr_g)
+
+## =========================
+## 3) Global outlier flag (global 3×IQR)
+## =========================
+gsrd2 <- gsrd2 %>%
+  mutate(
+    outlier_global = case_when(
+      is.na(RS_MASS25) ~ NA,
+      TRUE ~ (RS_MASS25 < low_g | RS_MASS25 > high_g)
+    )
+  )
+
+## =========================
+## 4) Site-level thresholds (site 3×IQR; small-n fallback to global)
+## =========================
+site_thr <- gsrd2 %>%
+  filter(!is.na(SITE_ID)) %>%
+  group_by(SITE_ID) %>%
+  summarise(
+    n_site = sum(!is.na(RS_MASS25)),
+    q1_s   = if (n_site >= min_n_site) quantile(RS_MASS25, 0.25, na.rm = TRUE) 
+    else NA_real_,
+    q3_s   = if (n_site >= min_n_site) quantile(RS_MASS25, 0.75, na.rm = TRUE) 
+    else NA_real_,
+    iqr_s  = if (n_site >= min_n_site) IQR(RS_MASS25, na.rm = TRUE) 
+    else NA_real_,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    low_s  = q1_s - 3 * iqr_s,
+    high_s = q3_s + 3 * iqr_s
+  )
+
+gsrd2 <- gsrd2 %>%
+  left_join(site_thr, by = "SITE_ID") %>%
+  mutate(
+    thr_low_siteiqr = case_when(
+      is.na(RS_MASS25) ~ NA_real_,
+      !is.na(n_site) & n_site >= min_n_site ~ low_s,
+      TRUE ~ low_g
+    ),
+    thr_high_siteiqr = case_when(
+      is.na(RS_MASS25) ~ NA_real_,
+      !is.na(n_site) & n_site >= min_n_site ~ high_s,
+      TRUE ~ high_g
+    ),
+    thr_source_siteiqr = case_when(
+      is.na(RS_MASS25) ~ NA_character_,
+      !is.na(n_site) & n_site >= min_n_site ~ paste0("site_3xIQR(SITE_ID_round", 
+                                                     digits_site, ")"),
+      TRUE ~ "global_3xIQR_fallback"
+    ),
+    outlier_siteiqr = case_when(
+      is.na(RS_MASS25) ~ NA,
+      TRUE ~ (RS_MASS25 < thr_low_siteiqr | RS_MASS25 > thr_high_siteiqr)
+    )
+  )
+
+## =========================
+## 5) Table 1: Global IQR (REFID×SITE_ID outlier distribution)
+## =========================
+tbl_global_ref_site <- gsrd2 %>%
+  filter(!is.na(REFID), !is.na(SITE_ID), !is.na(outlier_global)) %>%
+  group_by(REFID, SITE_ID) %>%
+  summarise(
+    n_nonmiss = n(),
+    outlier_n = sum(outlier_global),
+    outlier_pct = round(100 * mean(outlier_global), 2),
+    LAT = first(LAT_r),
+    LON = first(LON_r),
+    thr_low  = round(low_g, 3),
+    thr_high = round(high_g, 3),
+    .groups = "drop"
+  ) %>%
+  filter(outlier_n > 0) %>% 
+  arrange(desc(outlier_n), desc(outlier_pct), desc(n_nonmiss)) %>%
+  slice_head(n = top_n_pairs)
+
+tbl_global_ref_site %>%
+  dplyr::mutate(
+    SITE_ID = kableExtra::linebreak(SITE_ID, align = "l")
+  ) %>%
+  dplyr::select(REFID, SITE_ID, n_nonmiss, outlier_n, outlier_pct, LAT, LON) %>%
+  kable(
+    caption = paste0(
+      "Main sources of potential outliers under GLOBAL $3\\times IQR$ 
+      (RS\\_MASS25; SITE\\_ID from rounded LAT/LON, digits=",
+      digits_site, ")"
+    ),
+    booktabs = TRUE,
+    align = "c",
+    escape = FALSE,
+    col.names = c("REFID", "SITE_ID", "n_nonmiss", 
+                  "outlier_n", "outlier_pct", "LAT", "LON")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "striped", "scale_down"),
+    full_width = FALSE, position = "center",
+    font_size = 8
+  ) %>%
+  row_spec(0, bold = TRUE, background = "#f0f0f0") %>%
+  column_spec(1, width = "1.8cm") %>%
+  column_spec(2, width = "3.0cm") %>%
+  footnote(
+    general = kableExtra::linebreak(
+      paste0(
+        "Global thresholds are constant across rows: [", round(low_g, 3), ", ", 
+        round(high_g, 3), "]. ",
+        "Sorted by outlier count, then outlier proportion."
+      ),
+      align = "l"
+    ),
+    general_title = "Note:",
+    escape = TRUE
+  )
+
+
+## =========================
+## 6) Table 2: Site-level IQR (REFID×SITE_ID outlier distribution)
+## =========================
+tbl_siteiqr_ref_site <- gsrd2 %>%
+  filter(!is.na(REFID), !is.na(SITE_ID), !is.na(outlier_siteiqr)) %>%
+  group_by(REFID, SITE_ID) %>%
+  summarise(
+    n_nonmiss = n(),
+    outlier_n = sum(outlier_siteiqr),
+    outlier_pct = round(100 * mean(outlier_siteiqr), 2),
+    LAT = first(LAT_r),
+    LON = first(LON_r),
+    site_n = first(n_site),
+    thr_source = first(thr_source_siteiqr),
+    thr_low  = round(first(thr_low_siteiqr), 3),
+    thr_high = round(first(thr_high_siteiqr), 3),
+    .groups = "drop"
+  ) %>%
+  filter(outlier_n > 0) %>% 
+  arrange(desc(outlier_n), desc(outlier_pct), desc(n_nonmiss)) %>%
+  slice_head(n = top_n_pairs)
+
+tbl_siteiqr_ref_site %>%
+  dplyr::transmute(
+    REFID,
+    SITE_ID = kableExtra::linebreak(SITE_ID, align = "l"),
+    N = n_nonmiss,
+    OutN = outlier_n,
+    OutPct = outlier_pct,
+    Thr = thr_source,
+    Low = thr_low,
+    High = thr_high
+  ) %>%
+  kable(
+    caption = paste0(
+      "Main sources of potential outliers under SITE-level 3xIQR (RS\\_MASS25; digits=",
+      digits_site, ", min\\_n\\_site=", min_n_site, ")"
+    ),
+    booktabs = TRUE,
+    align = "c"
+  ) %>%
+  kable_styling(
+    latex_options = c("striped", "scale_down"), 
+    full_width = FALSE, position = "center",
+    font_size = 7
+  ) %>%
+  column_spec(2, width = "3.2cm") %>%
+  footnote(
+    general = kableExtra::linebreak(
+      paste0(
+        "Site thresholds computed within each SITE_ID when n_site >= ", min_n_site,
+        "; otherwise global fallback [", round(low_g, 3), ", ", round(high_g, 3), "]."
+      ),
+      align = "l"
+    ),
+    general_title = "Note:",
+    escape = TRUE
+  )
+
+
+```
+
+####  Overall comparison: global vs. site-level IQR outlier rates
+
+```{r}
+outlier_summary <- gsrd2 %>%
+  summarise(
+    total_nonmiss      = sum(!is.na(RS_MASS25)),
+    global_outlier_n   = sum(outlier_global, na.rm = TRUE),
+    global_outlier_pct = round(100 * mean(outlier_global, na.rm = TRUE), 2),
+    site_outlier_n     = sum(outlier_siteiqr, na.rm = TRUE),
+    site_outlier_pct   = round(100 * mean(outlier_siteiqr, na.rm = TRUE), 2)
+  )
+
+outlier_summary %>%
+  kable(
+    caption = "Overall comparison of global vs. site-level outlier rates (3xIQR)",
+    booktabs = TRUE,
+    col.names = c("N", "Global N", "Global %", "Site N", "Site %"),
+    align = "c"
+  ) %>%
+  kable_styling(
+    latex_options = c("striped", "scale_down"), 
+    full_width = FALSE,
+    position = "center",
+    font_size = 8
+  ) %>%
+  row_spec(0, bold = TRUE, background = "#f0f0f0")
+
+
+
+```
+
+## 4.3 IQR figures of stem respiration rates
+Frequency plots and outlier detection (defined by IQR)
+Violin plots + jittered points + red dashed lines for outlier thresholds
+
+```{r, results='asis', echo=FALSE, fig.show='hold'}
+# Keep only the three required variables
+vars <- c("RS_AREA", "RS_VOL", "RS_MASS")
+# Check if variables exist in the dataset
+vars <- vars[vars %in% names(gsrd)]
+if (length(vars) == 0) stop("None of the specified variables were found in 'gsrd'.")
+
+# Replace Inf / -Inf values with NA
+for (v in vars) gsrd[[v]][is.infinite(gsrd[[v]])] <- NA
+
+# Function to calculate outlier thresholds (IQR method, 3*IQR)
+outlier_thresholds <- function(x, iqr_mult = 3) {
+  x <- x[!is.na(x)]
+  q1 <- quantile(x, 0.25, na.rm = TRUE)
+  q3 <- quantile(x, 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  lower <- q1 - iqr_mult * iqr
+  upper <- q3 + iqr_mult * iqr
+  c(lower = as.numeric(lower), upper = as.numeric(upper))
+}
+
+# Function to plot a single-variable violin plot with outlier thresholds
+plot_violin_with_outliers <- function(data, var, iqr_mult = 3) {
+  x <- data[[var]]
+  x_clean <- x[!is.na(x) & is.finite(x)]
+  
+  # Skip variables with insufficient numeric data
+  if (length(x_clean) < 2) {
+    return(ggplot() + ggtitle(paste(var, "- no numeric data")) + theme_void())
+  }
+  
+  # Calculate outlier thresholds and summary statistics
+  th <- outlier_thresholds(x_clean, iqr_mult)
+  n_out <- sum(x_clean < th["lower"] | x_clean > th["upper"])
+  total <- length(x_clean)
+  pct <- round(100 * n_out / total, 2)
+  
+  # Create violin plot
+  ggplot(data, aes(x = "", y = .data[[var]])) +
+    geom_violin(fill = "grey80", color = "black") +
+    geom_jitter(width = 0.15, size = 1, alpha = 0.6) +
+    geom_hline(yintercept = th, color = "red", size = 0.8, linetype = "dashed") +
+    theme_bw() +
+    labs(
+      title = paste0(var, " (outliers = ", n_out, "/", total, " = ", pct, "%)"),
+      x = NULL, y = var
+    ) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank()
+    )
+}
+
+# Generate and output individual plots for each variable
+for (v in vars) {
+  # Render and output the individual plot
+  print(plot_violin_with_outliers(gsrd, v, iqr_mult = 3))
+  # Add page breaks between plots (for PDF output, optional)
+  if (v != tail(vars, 1)) {
+    if (knitr::is_latex_output()) {
+      cat("\\newpage\n")  # Page break for PDF
+    } else {
+      cat("\n\n***\n\n")  # Separator for other formats
+    }
+  }
+}
+```
+
